@@ -76,10 +76,176 @@
     return '<svg class="i ' + (cls || '') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + I[n] + '</svg>';
   }
   var CH_FLAG = '<span class="flag" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M10 5h4v5h5v4h-5v5h-4v-5H5v-4h5z" fill="#fff"/></svg></span>';
+  I.tr = '<path d="M3 5h8M7 3v2M4.5 5c.8 3 3 5.5 6 7M9.5 5c-.8 3.5-3 6.5-6 8.5"/><path d="M12.5 21l4-9 4 9M14 17.5h5"/>';
+
+  /* ---------------- translation helpers ---------------- */
+  var LEX = window.LEX || {};
+  function plainMd(s) { return String(s).replace(/\*\*|==|\*/g, ''); }
+  // one translatable sentence: [md, en, br]
+  function sentHtml(it) {
+    return (it[2] ? '<br>' : '') + '<span class="s" data-en="' + esc(it[1]) + '">' + md(it[0]) + '</span>';
+  }
+  function sentsHtml(list) { return list.map(sentHtml).join(' ').replace(/ <br>/g, '<br>'); }
+  function enPar(text, cls) { return text ? '<div class="en-par ' + (cls || '') + '">' + esc(text) + '</div>' : ''; }
+  function parasHtml(P) {
+    return P.map(function (p) { return '<p>' + sentsHtml(p) + '</p>' + enPar(p.map(function (x) { return x[1]; }).join(' ')); }).join('');
+  }
+  function sSpan(html, en, audioId) {
+    return '<span class="s" data-en="' + esc(en || '') + '"' + (audioId ? ' data-a="' + audioId + '"' : '') + '>' + html + '</span>';
+  }
+  function enToggle() {
+    var on = !!S.settings.parEn;
+    return '<button class="btn sm en-toggle' + (on ? ' on' : '') + '" data-act="paren" aria-pressed="' + on + '">' + icon('tr', 's') + ' <span>' + (on ? 'Englisch ausblenden' : 'Englisch zeigen') + '</span></button>';
+  }
+  function gloss(w) {
+    var k = w.toLowerCase();
+    return LEX[k] || LEX[k.replace(/ß/g, 'ss')] || null;
+  }
+
+  /* speech synthesis for any text (fallback when there is no recorded clip) */
+  var TTS = { ok: 'speechSynthesis' in window, voice: null };
+  function pickVoice() {
+    if (!TTS.ok) return;
+    var vs = window.speechSynthesis.getVoices().filter(function (v) { return /^de/i.test(v.lang); });
+    TTS.voice = vs.filter(function (v) { return v.localService && /CH/i.test(v.lang); })[0] ||
+      vs.filter(function (v) { return v.localService; })[0] || vs[0] || null;
+  }
+  if (TTS.ok) { pickVoice(); try { window.speechSynthesis.onvoiceschanged = pickVoice; } catch (e) {} }
+  function speak(text) {
+    if (!TTS.ok) return false;
+    try {
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(text);
+      u.lang = TTS.voice ? TTS.voice.lang : 'de-DE';
+      if (TTS.voice) u.voice = TTS.voice;
+      u.rate = Math.max(0.6, S.settings.rate * 0.95);
+      window.speechSynthesis.speak(u);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  /* ---------------- translation sheet ---------------- */
+  var sheetReturn = null;
+  function tokensHtml(text) {
+    return esc(text).replace(/[A-Za-zÄÖÜäöüß]+(?:-[A-Za-zÄÖÜäöüß]+)*/g, function (w) {
+      return gloss(w) ? '<button class="tok" data-w="' + w + '">' + w + '</button>' : w;
+    });
+  }
+  function openSheet(items, words, opts) {
+    opts = opts || {};
+    closeSheet(true);
+    sheetReturn = document.activeElement;
+    var wordsHtml = words && words.length ? '<div class="tr-words"><div class="tr-label">Wörter</div>' + words.map(function (w) {
+      var g = gloss(w);
+      return '<div class="wrow"><b>' + esc(w) + '</b><span>' + (g ? esc(g) : '<span class="muted">–</span>') + '</span></div>';
+    }).join('') + '</div>' : '';
+    var itemsHtml = items.map(function (it, i) {
+      var canPlay = it.a || (TTS.ok && TTS.voice);
+      return '<div class="tr-item">' +
+        '<div class="tr-de">' + (canPlay ? '<button class="play sm" data-sheetplay="' + i + '" aria-label="Anhören">' + icon('play') + '</button>' : '') +
+        '<div>' + tokensHtml(it.de) + '</div></div>' +
+        '<div class="tr-en">' + (it.en ? esc(it.en) : '<span class="muted">Keine Übersetzung vorhanden – siehe Wörter.</span>') + '</div>' +
+        '<div class="tr-gloss" id="tg' + i + '" hidden></div></div>';
+    }).join('');
+    var wrap = document.createElement('div');
+    wrap.id = 'sheet';
+    wrap.className = 'sheet-wrap';
+    wrap.innerHTML = '<div class="sheet-bg" data-close></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Übersetzung">' +
+      '<div class="sheet-head"><span class="row" style="gap:8px">' + icon('tr') + '<b>Übersetzung</b></span><button class="icon-btn" data-close aria-label="Schliessen">' + icon('x') + '</button></div>' +
+      '<div class="sheet-body">' + (opts.wordsFirst ? wordsHtml + itemsHtml : itemsHtml + wordsHtml) +
+      (items.length ? '<p class="small muted" style="margin:12px 0 0">Tipp: Tippen Sie auf ein unterstrichenes Wort für seine Bedeutung.</p>' : '') + '</div></div>';
+    document.body.appendChild(wrap);
+    requestAnimationFrame(function () { wrap.classList.add('open'); });
+    wrap.addEventListener('click', function (e) {
+      if (e.target.closest('[data-close]')) { closeSheet(); return; }
+      var t = e.target.closest('.tok');
+      if (t) {
+        var box = t.closest('.tr-item').querySelector('.tr-gloss');
+        $$('.tok.on', wrap).forEach(function (x) { x.classList.remove('on'); });
+        t.classList.add('on');
+        box.hidden = false;
+        box.innerHTML = '<b>' + esc(t.dataset.w) + '</b> – ' + esc(gloss(t.dataset.w) || '–');
+        return;
+      }
+      var pb = e.target.closest('[data-sheetplay]');
+      if (pb) {
+        var it = items[+pb.dataset.sheetplay];
+        if (it.a) Player.toggle(pb, [it.a]);
+        else if (!speak(it.de)) toast('Keine Stimme verfügbar');
+      }
+    });
+    var cb = $('.sheet-head .icon-btn', wrap);
+    if (cb) try { cb.focus({ preventScroll: true }); } catch (e) {}
+  }
+  function closeSheet(silent) {
+    var w = document.getElementById('sheet');
+    if (!w) return;
+    Player.stop();
+    if (TTS.ok) try { window.speechSynthesis.cancel(); } catch (e) {}
+    w.remove();
+    $$('.s.tapped').forEach(function (x) { x.classList.remove('tapped'); });
+    if (!silent && sheetReturn && sheetReturn.focus) try { sheetReturn.focus({ preventScroll: true }); } catch (e) {}
+  }
+  function itemFromEl(el) {
+    return { de: plainMd(el.textContent), en: el.dataset.en || '', a: el.dataset.a || null };
+  }
+
+  /* selection → "Übersetzen" pill */
+  var pill = null, pillData = null;
+  function hidePill() { if (pill) pill.hidden = true; pillData = null; }
+  function placePill(range) {
+    var r = range.getBoundingClientRect();
+    if (!r || (!r.width && !r.height)) { hidePill(); return; }
+    pill.hidden = false;
+    var pw = pill.offsetWidth || 130, ph = pill.offsetHeight || 40;
+    var x = Math.min(window.innerWidth - pw - 8, Math.max(8, r.left + r.width / 2 - pw / 2));
+    var y = r.bottom + 12;
+    if (y + ph > window.innerHeight - 8) y = r.top - ph - 12;
+    y = Math.min(window.innerHeight - ph - 8, Math.max(8, y));
+    pill.style.left = x + 'px'; pill.style.top = y + 'px';
+  }
+  function onSelection() {
+    var sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) { hidePill(); return; }
+    var text = sel.toString().replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 800) { hidePill(); return; }
+    var range = sel.getRangeAt(0);
+    var anc = range.commonAncestorContainer;
+    if (anc.nodeType !== 1) anc = anc.parentNode;
+    if (!main.contains(anc) || (anc.closest && anc.closest('input,textarea'))) { hidePill(); return; }
+    var sents = $$('.s', main).filter(function (el) { try { return range.intersectsNode(el); } catch (e) { return false; } });
+    if (!sents.length && anc.closest) { var up = anc.closest('.s'); if (up) sents = [up]; }
+    pillData = { text: text, items: sents.slice(0, 12).map(itemFromEl), range: range };
+    if (!pill) {
+      pill = document.createElement('button');
+      pill.className = 'selpill';
+      pill.type = 'button';
+      pill.innerHTML = icon('tr', 's') + ' Übersetzen';
+      pill.addEventListener('mousedown', function (e) { e.preventDefault(); });
+      pill.addEventListener('click', function () {
+        if (!pillData) return;
+        var words = [], seen = {};
+        (pillData.text.match(/[A-Za-zÄÖÜäöüß]+(?:-[A-Za-zÄÖÜäöüß]+)*/g) || []).forEach(function (w) {
+          if (!seen[w.toLowerCase()] && words.length < 14 && (w.length > 1 || gloss(w))) { seen[w.toLowerCase()] = 1; words.push(w); }
+        });
+        var few = words.length <= 3;
+        var items = pillData.items.length ? pillData.items : [{ de: pillData.text, en: '', a: null }];
+        hidePill();
+        try { window.getSelection().removeAllRanges(); } catch (e) {}
+        openSheet(items, words, { wordsFirst: few });
+      });
+      document.body.appendChild(pill);
+    }
+    placePill(range);
+  }
+  var selTimer = null;
+  document.addEventListener('selectionchange', function () { clearTimeout(selTimer); selTimer = setTimeout(onSelection, 220); });
+  window.addEventListener('scroll', function () { if (pill && !pill.hidden && pillData) placePill(pillData.range); }, { passive: true });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeSheet(); hidePill(); } });
 
   /* ---------------- state ---------------- */
   var KEY = 'uw-progress-v1';
-  var DEFAULT_SETTINGS = { theme: 'auto', rate: 1, en: true, dmode: 'de-en', dir: 'de-en' };
+  var DEFAULT_SETTINGS = { theme: 'auto', rate: 1, en: true, dmode: 'de-en', dir: 'de-en', parEn: false };
   var S = load();
   function load() {
     var d = {};
@@ -118,12 +284,21 @@
   function unitDone(u) { return COUNTED.filter(function (s) { return isDone(u, s); }).length; }
 
   /* ---------------- theme ---------------- */
+  function applyParEn() {
+    document.body.classList.toggle('show-en', !!S.settings.parEn);
+    $$('.en-toggle').forEach(function (b) {
+      b.classList.toggle('on', !!S.settings.parEn);
+      b.setAttribute('aria-pressed', String(!!S.settings.parEn));
+      var sp = b.querySelector('span'); if (sp) sp.textContent = S.settings.parEn ? 'Englisch ausblenden' : 'Englisch zeigen';
+    });
+  }
   function applyTheme() {
     var t = S.settings.theme;
     if (t === 'auto') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.setAttribute('data-theme', t);
   }
   applyTheme();
+  document.body.classList.toggle('show-en', !!S.settings.parEn);
 
   /* ---------------- audio player ---------------- */
   var Player = (function () {
@@ -294,7 +469,7 @@
         esc(s.label) + (isDone(uid, s.id) ? icon('check', 's ok') : '') + '</a>';
     }).join('');
     main.innerHTML = '<div class="unit-head"><div class="row"><span class="chip">Lektion ' + u.id + '</span><span class="chip lvl">' + esc(u.level) + '</span><span class="chip">' + esc(u.theme) + '</span></div>' +
-      '<h1>' + esc(u.title) + '</h1><p class="muted" style="margin:0">' + esc(u.subtitle) + '</p></div>' +
+      '<h1>' + sSpan(esc(u.title), u.en.title) + '</h1><p class="muted" style="margin:0">' + sSpan(esc(u.subtitle), u.en.subtitle) + '</p></div>' +
       '<nav class="tabs" aria-label="Abschnitte">' + tabs + '</nav><div id="sec"></div>';
     var el = document.getElementById('sec');
     var fn = { ueberblick: secOverview, woerter: secVocab, hoeren: secDialogue, grammatik: secGrammar, ueben: secExercises, lesen: secReading, schreiben: secWriting, sprechen: secSpeaking }[sec];
@@ -344,9 +519,9 @@
   }
   function vcard(v) {
     return '<div class="card vcard">' + playBtn(v.aw, 'Wort anhören') +
-      '<div><div><span class="vword">' + wordHtml(v.de) + '</span><span class="vforms">' + formsHtml(v) + '</span></div>' +
+      '<div><div><span class="vword">' + sSpan(wordHtml(v.de), v.en, v.aw) + '</span><span class="vforms">' + formsHtml(v) + '</span></div>' +
       '<div class="ven">' + esc(v.en) + '</div>' +
-      '<div class="vex">' + playBtn(v.ae, 'Beispiel anhören', 'sm') + '<div>' + esc(v.ex) + '<span class="en">' + esc(v.exEn) + '</span></div></div></div></div>';
+      '<div class="vex">' + playBtn(v.ae, 'Beispiel anhören', 'sm') + '<div>' + sSpan(esc(v.ex), v.exEn, v.ae) + '<span class="en">' + esc(v.exEn) + '</span></div></div></div></div>';
   }
   function enSeg() {
     return '<div class="seg" role="group" aria-label="Übersetzung"><button data-act="en" data-v="1" class="' + (S.settings.en ? 'on' : '') + '">EN zeigen</button><button data-act="en" data-v="0" class="' + (!S.settings.en ? 'on' : '') + '">EN verstecken</button></div>';
@@ -365,17 +540,17 @@
   /* ----- dialogue ----- */
   function secDialogue(u, el) {
     var d = u.dialogue, mode = S.settings.dmode;
-    el.innerHTML = '<section class="card"><h2 style="margin-top:0">' + esc(d.title) + '</h2><p class="muted">' + esc(d.intro) + '</p>' +
+    el.innerHTML = '<section class="card"><h2 style="margin-top:0">' + sSpan(esc(d.title), d.titleEn) + '</h2><p class="muted">' + sentsHtml(d.introS) + '</p>' + enPar(d.introS.map(function (x) { return x[1]; }).join(' ')) +
       '<div class="speakers">' + Object.keys(d.speakers).map(function (k) { return '<span><i class="spk-dot bg-' + k + '"></i>' + esc(d.speakers[k]) + '</span>'; }).join('') + '</div>' +
       '<div class="toolbar" style="margin:14px 0 0"><button class="btn primary" data-play="' + d.lines.map(function (l) { return l.audio; }).join(',') + '" data-hl="ln" data-gap="450">' + icon('play', 's') + ' Ganzen Dialog hören</button>' +
       '<div class="seg" role="group" aria-label="Textanzeige">' + [['listen', 'Nur hören'], ['de', 'Deutsch'], ['de-en', '+ Englisch']].map(function (m) {
         return '<button data-act="dmode" data-v="' + m[0] + '" class="' + (mode === m[0] ? 'on' : '') + '">' + m[1] + '</button>';
       }).join('') + '</div></div>' +
-      '<p class="small muted" style="margin:10px 0 0">Tipp: Hören Sie zuerst ohne Text („Nur hören"), beantworten Sie die Fragen und lesen Sie dann mit.</p></section>' +
+      '<p class="small muted" style="margin:10px 0 0">Tipp: Hören Sie zuerst ohne Text („Nur hören"), beantworten Sie die Fragen und lesen Sie dann mit. Tippen Sie auf einen Satz oder markieren Sie ein Wort für die Übersetzung.</p></section>' +
       '<div class="dlg mode-' + mode + '" id="dlg" style="margin-top:14px">' + d.lines.map(function (l, i) {
-        return '<div class="line ' + l.s + '" id="ln' + i + '">' + playBtn(l.audio, 'Satz anhören', 'sm') + '<div><div class="who c-' + l.s + '">' + esc(d.speakers[l.s]) + '</div><div class="de">' + md(l.de) + '</div><div class="en-t">' + esc(l.en) + '</div></div></div>';
+        return '<div class="line ' + l.s + '" id="ln' + i + '">' + playBtn(l.audio, 'Satz anhören', 'sm') + '<div><div class="who c-' + l.s + '">' + esc(d.speakers[l.s]) + '</div><div class="de">' + sSpan(md(l.de), l.en, l.audio) + '</div><div class="en-t">' + esc(l.en) + '</div></div></div>';
       }).join('') + '</div>' +
-      '<h2>Haben Sie alles verstanden?</h2><section class="card" id="dq"></section>';
+      '<div class="row" style="justify-content:space-between;margin-top:28px"><h2 style="margin:0">Haben Sie alles verstanden?</h2>' + enToggle() + '</div><section class="card" id="dq" style="margin-top:12px"></section>';
     renderQuestions(document.getElementById('dq'), d.questions, u.id + '-hq', function () { setDone(u.id, 'hoeren'); });
   }
 
@@ -385,8 +560,9 @@
     function draw() {
       box.innerHTML = qs.map(function (q, i) {
         var opts = q.type === 'tf' ? ['Richtig', 'Falsch'] : q.options;
-        return '<div class="q"><div class="qt"><span class="qn">' + (i + 1) + '.</span><span>' + md(q.q) + '</span></div><div class="opts">' +
-          opts.map(function (o, j) { return '<button class="opt" data-i="' + i + '" data-j="' + j + '">' + esc(o) + '</button>'; }).join('') +
+        var optsEn = q.type === 'tf' ? ['true', 'false'] : (q.optionsEn || []);
+        return '<div class="q"><div class="qt"><span class="qn">' + (i + 1) + '.</span><span>' + sSpan(md(q.q), q.qEn) + enPar(q.qEn) + '</span></div><div class="opts">' +
+          opts.map(function (o, j) { return '<button class="opt" data-i="' + i + '" data-j="' + j + '">' + esc(o) + (optsEn[j] && optsEn[j] !== o ? '<span class="en-par opt-en">' + esc(optsEn[j]) + '</span>' : '') + '</button>'; }).join('') +
           '</div><div class="fb" hidden></div></div>';
       }).join('') + '<div class="ex-foot"><span class="score"></span><div class="row"><button class="btn" data-reset>' + icon('refresh', 's') + ' Nochmal</button><button class="btn primary" data-check>Prüfen</button></div></div>';
       sel = qs.map(function () { return null; });
@@ -416,7 +592,7 @@
           var fb = box.querySelectorAll('.fb')[i];
           fb.hidden = false;
           fb.className = 'fb ' + (ok ? 'good' : 'bad');
-          fb.innerHTML = (ok ? icon('check', 's') + ' Richtig!' : icon('x', 's') + (sel[i] == null ? ' Keine Antwort.' : ' Leider falsch.')) + (q.why ? ' <span class="sol">' + esc(q.why) + '</span>' : '');
+          fb.innerHTML = (ok ? icon('check', 's') + ' Richtig!' : icon('x', 's') + (sel[i] == null ? ' Keine Antwort.' : ' Leider falsch.')) + (q.why ? ' <span class="sol">' + sSpan(esc(q.why), q.whyEn) + '</span>' : '');
         });
         box.classList.add('checked');
         var sc = $('.score', box);
@@ -435,16 +611,17 @@
   }
   function examplesHtml(exs) {
     return '<div class="examples">' + exs.map(function (x) {
-      return '<div class="ex">' + playBtn(x.audio, 'Beispiel anhören', 'sm') + '<div><div>' + md(x.de) + '</div>' + (x.en ? '<div class="en-t">' + esc(x.en) + '</div>' : '') + '</div></div>';
+      return '<div class="ex">' + playBtn(x.audio, 'Beispiel anhören', 'sm') + '<div><div>' + sSpan(md(x.de), x.en, x.audio) + '</div>' + (x.en ? '<div class="en-t">' + esc(x.en) + '</div>' : '') + '</div></div>';
     }).join('') + '</div>';
   }
   function grammarHtml(g) {
-    return '<section class="card gtext"><h2 style="margin-top:0">' + esc(g.title) + '</h2>' + (g.summary ? '<p class="muted">' + md(g.summary) + '</p>' : '') + '</section>' +
+    return '<section class="card gtext"><div class="row" style="justify-content:space-between;align-items:flex-start"><h2 style="margin:0;flex:1;min-width:200px">' + sSpan(esc(g.title), g.titleEn) + '</h2>' + enToggle() + '</div>' +
+      (g.summaryS.length ? '<p class="muted">' + sentsHtml(g.summaryS) + '</p>' + enPar(g.summaryS.map(function (x) { return x[1]; }).join(' ')) : '') + '</section>' +
       g.sections.map(function (s) {
-        return '<section class="card gtext" style="margin-top:14px"><h3 style="margin-top:0">' + esc(s.h) + '</h3>' +
-          (s.text ? mdBlock(s.text) : '') + (s.table ? tableHtml(s.table) : '') + (s.examples ? examplesHtml(s.examples) : '') + (s.text2 ? mdBlock(s.text2) : '') + '</section>';
+        return '<section class="card gtext" style="margin-top:14px"><h3 style="margin-top:0">' + sSpan(esc(s.h), s.hEn) + '</h3>' + enPar(s.hEn, 'h-en') +
+          (s.textP ? parasHtml(s.textP) : '') + (s.table ? tableHtml(s.table) : '') + (s.examples ? examplesHtml(s.examples) : '') + (s.text2P ? parasHtml(s.text2P) : '') + '</section>';
       }).join('') +
-      (g.tip ? '<div class="tip">' + icon('bulb') + '<div><b>Tipp</b>' + mdBlock(g.tip) + '</div></div>' : '');
+      (g.tipP.length ? '<div class="tip">' + icon('bulb') + '<div><b>Tipp</b>' + parasHtml(g.tipP) + '</div></div>' : '');
   }
   function secGrammar(u, el) {
     el.innerHTML = grammarHtml(u.grammar) +
@@ -454,10 +631,10 @@
   /* ----- exercises ----- */
   var KIND = { choice: 'Auswahl', gap: 'Lücken', order: 'Satzbau', match: 'Zuordnen', dictation: 'Diktat' };
   function secExercises(u, el) {
-    el.innerHTML = '<p class="muted" style="margin-top:0">Antworten Sie zuerst alle Aufgaben einer Übung und drücken Sie dann auf <b>Prüfen</b>. Nach dem Prüfen können Sie die richtigen Sätze anhören.</p>' +
+    el.innerHTML = '<div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:12px"><p class="muted" style="margin:0;flex:1;min-width:220px">Antworten Sie zuerst alle Aufgaben einer Übung und drücken Sie dann auf <b>Prüfen</b>. Nach dem Prüfen sehen Sie die Übersetzung und können die Sätze anhören.</p>' + enToggle() + '</div>' +
       u.exercises.map(function (ex, i) {
         var sc = S.scores[u.id + '-ex' + i];
-        return '<section class="card ex-card" id="ex' + i + '"><h3><span class="kind">' + (KIND[ex.type] || '') + '</span>' + (sc ? '<span class="chip ' + (sc.c === sc.t ? 'lvl' : '') + '">zuletzt ' + sc.c + '/' + sc.t + '</span>' : '') + '</h3><p style="margin:-4px 0 10px;font-weight:650">' + esc(ex.title) + '</p><div class="ex-body"></div></section>';
+        return '<section class="card ex-card" id="ex' + i + '"><h3><span class="kind">' + (KIND[ex.type] || '') + '</span>' + (sc ? '<span class="chip ' + (sc.c === sc.t ? 'lvl' : '') + '">zuletzt ' + sc.c + '/' + sc.t + '</span>' : '') + '</h3><p style="margin:-4px 0 10px;font-weight:650">' + sSpan(esc(ex.title), ex.titleEn) + '</p>' + enPar(ex.titleEn) + '<div class="ex-body"></div></section>';
       }).join('');
     u.exercises.forEach(function (ex, i) {
       var card = document.getElementById('ex' + i);
@@ -480,9 +657,10 @@
     sc.textContent = c + ' / ' + t + ' richtig' + (c === t ? ' – super!' : '');
     sc.className = 'score' + (c === t ? ' good' : '');
   }
-  function fbHtml(ok, full, audioId, extra) {
-    return (ok ? '<span>' + icon('check', 's') + ' Richtig!</span>' : '<span>' + icon('x', 's') + ' Richtig ist:</span> <span class="sol">' + md(full) + '</span>') +
-      (extra || '') + (audioId ? ' ' + playBtn(audioId, 'Richtigen Satz anhören', 'sm') : '');
+  function fbHtml(ok, full, audioId, extra, en) {
+    return (ok ? '<span>' + icon('check', 's') + ' Richtig!</span>' : '<span>' + icon('x', 's') + ' Richtig ist:</span> <span class="sol">' + sSpan(md(full), en, audioId) + '</span>') +
+      (extra || '') + (audioId ? ' ' + playBtn(audioId, 'Richtigen Satz anhören', 'sm') : '') +
+      (en ? '<div class="fb-en">' + icon('tr', 's') + ' ' + esc(en) + '</div>' : '');
   }
   function blanksHtml(q) {
     var n = 0;
@@ -495,7 +673,7 @@
       sel = ex.items.map(function () { return null; });
       body.classList.remove('checked');
       body.innerHTML = ex.items.map(function (it, i) {
-        return '<div class="q" data-q="' + i + '"><div class="qt"><span class="qn">' + (i + 1) + '.</span><span class="sent">' + blanksHtml(it.q) + '</span></div><div class="opts">' +
+        return '<div class="q" data-q="' + i + '"><div class="qt"><span class="qn">' + (i + 1) + '.</span><span><span class="sent">' + blanksHtml(it.q) + '</span>' + enPar(it.en) + '</span></div><div class="opts">' +
           it.options.map(function (o, j) { return '<button class="opt" data-i="' + i + '" data-j="' + j + '">' + esc(o) + '</button>'; }).join('') + '</div><div class="fb" hidden></div></div>';
       }).join('') + exFoot();
     }
@@ -524,7 +702,7 @@
           });
           $$('.blank', q).forEach(function (b) { b.classList.add(ok ? 'good' : 'bad'); });
           var fb = $('.fb', q); fb.hidden = false; fb.className = 'fb ' + (ok ? 'good' : 'bad');
-          fb.innerHTML = fbHtml(ok, it.full, it.audio);
+          fb.innerHTML = fbHtml(ok, it.full, it.audio, '', it.en);
         });
         body.classList.add('checked');
         setScore(body, c, ex.items.length);
@@ -550,7 +728,7 @@
       body.innerHTML = ex.items.map(function (it, i) {
         var w = Math.max(6, Math.max.apply(null, it.a.map(function (a) { return a.length; })) + 2);
         var html = esc(it.q).replace('___', '<input class="gap-in" data-i="' + i + '" style="width:' + w + 'ch" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Lücke ' + (i + 1) + '">');
-        return '<div class="q" data-q="' + i + '"><div class="qt"><span class="qn">' + (i + 1) + '.</span><span class="sent">' + html + '</span></div><div class="fb" hidden></div></div>';
+        return '<div class="q" data-q="' + i + '"><div class="qt"><span class="qn">' + (i + 1) + '.</span><span><span class="sent">' + html + '</span>' + enPar(it.en) + '</span></div><div class="fb" hidden></div></div>';
       }).join('') + umlautBar() + exFoot();
     }
     draw();
@@ -574,7 +752,7 @@
           if (ok) c++;
           inp.classList.remove('good', 'bad'); inp.classList.add(ok ? 'good' : 'bad');
           var fb = $('[data-q="' + i + '"] .fb', body); fb.hidden = false; fb.className = 'fb ' + (ok ? 'good' : 'bad');
-          fb.innerHTML = fbHtml(ok, it.full, it.audio);
+          fb.innerHTML = fbHtml(ok, it.full, it.audio, '', it.en);
         });
         body.classList.add('checked');
         setScore(body, c, ex.items.length);
@@ -600,7 +778,7 @@
       picked = ex.items.map(function () { return []; });
       body.classList.remove('checked');
       body.innerHTML = ex.items.map(function (it, i) {
-        return '<div class="q" data-q="' + i + '"><div class="qt"><span class="qn">' + (i + 1) + '.</span><span class="muted small">Tippen Sie die Wörter in der richtigen Reihenfolge an.</span></div>' +
+        return '<div class="q" data-q="' + i + '"><div class="qt"><span class="qn">' + (i + 1) + '.</span><span><span class="muted small">Tippen Sie die Wörter in der richtigen Reihenfolge an.</span>' + enPar(it.en) + '</span></div>' +
           '<div class="tiles answer" aria-label="Ihr Satz"></div><div class="tiles pool">' +
           pool(it, i).map(function (k) { return '<button class="tile" data-i="' + i + '" data-k="' + k + '">' + esc(it.tokens[k]) + '</button>'; }).join('') +
           '</div><div class="fb" hidden></div></div>';
@@ -626,7 +804,7 @@
           var q = $('[data-q="' + i + '"]', body);
           var ans = $('.answer', q); ans.classList.remove('good', 'bad'); ans.classList.add(ok ? 'good' : 'bad');
           var fb = $('.fb', q); fb.hidden = false; fb.className = 'fb ' + (ok ? 'good' : 'bad');
-          fb.innerHTML = fbHtml(ok, it.a[0], it.audio, (!ok && it.a.length > 1) ? ' <span class="small muted">(auch möglich: ' + esc(it.a.slice(1).join(' / ')) + ')</span>' : '');
+          fb.innerHTML = fbHtml(ok, it.a[0], it.audio, (!ok && it.a.length > 1) ? ' <span class="small muted">(auch möglich: ' + esc(it.a.slice(1).join(' / ')) + ')</span>' : '', it.en);
         });
         body.classList.add('checked');
         setScore(body, c, ex.items.length);
@@ -709,7 +887,7 @@
       body.classList.remove('checked');
       body.innerHTML = ex.items.map(function (it, i) {
         return '<div class="q" data-q="' + i + '"><div class="dict">' + playBtn(it.audio, 'Satz ' + (i + 1) + ' anhören') +
-          '<input data-i="' + i + '" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Satz ' + (i + 1) + ' hier schreiben …" aria-label="Diktat Satz ' + (i + 1) + '"></div><div class="fb" hidden></div></div>';
+          '<input data-i="' + i + '" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Satz ' + (i + 1) + ' hier schreiben …" aria-label="Diktat Satz ' + (i + 1) + '"></div>' + enPar(it.en) + '<div class="fb" hidden></div></div>';
       }).join('') + umlautBar() + '<p class="small muted">Gross-/Kleinschreibung und Satzzeichen werden nicht bewertet.</p>' + exFoot();
     }
     draw();
@@ -732,7 +910,7 @@
           var ok = norm(inp.value) === norm(it.a); if (ok) c++;
           inp.classList.remove('good', 'bad'); inp.classList.add(ok ? 'good' : 'bad');
           var fb = $('[data-q="' + i + '"] .fb', body); fb.hidden = false; fb.className = 'fb ' + (ok ? 'good' : 'bad');
-          fb.innerHTML = ok ? icon('check', 's') + ' Richtig!' : !inp.value.trim() ? '<span>' + icon('x', 's') + ' Richtig ist:</span> <span class="sol">' + esc(it.a) + '</span>' : '<span>' + icon('x', 's') + '</span><span class="sol diff">' + diffHtml(it.a, inp.value) + '</span>';
+          fb.innerHTML = (ok ? icon('check', 's') + ' Richtig!' : !inp.value.trim() ? '<span>' + icon('x', 's') + ' Richtig ist:</span> <span class="sol">' + esc(it.a) + '</span>' : '<span>' + icon('x', 's') + '</span><span class="sol diff">' + diffHtml(it.a, inp.value) + '</span>') + (it.en ? '<div class="fb-en">' + icon('tr', 's') + ' ' + esc(it.en) + '</div>' : '');
         });
         body.classList.add('checked');
         setScore(body, c, ex.items.length);
@@ -745,10 +923,12 @@
   function secReading(u, el) {
     var r = u.reading;
     var ids = r.paras.map(function (p) { return p.audio; }).filter(Boolean);
-    el.innerHTML = '<section class="card reading"><div class="kind">' + esc(r.kind) + '</div><h2 style="margin:4px 0 12px">' + esc(r.title) + '</h2>' +
-      (ids.length ? '<div class="row" style="margin-bottom:12px"><button class="btn sm" data-play="' + r.paras.map(function (p) { return p.audio || ''; }).join(',') + '" data-hl="pa" data-gap="600">' + icon('play', 's') + ' Text vorlesen</button><span class="small muted">oder einen Absatz antippen</span></div>' : '') +
+    el.innerHTML = '<section class="card reading"><div class="row" style="justify-content:space-between;align-items:flex-start"><div style="flex:1;min-width:200px"><div class="kind">' + esc(r.kind) + '</div><h2 style="margin:4px 0 12px">' + sSpan(esc(r.title), r.titleEn) + '</h2></div>' + enToggle() + '</div>' +
+      (ids.length ? '<div class="row" style="margin-bottom:12px"><button class="btn sm" data-play="' + r.paras.map(function (p) { return p.audio || ''; }).join(',') + '" data-hl="pa" data-gap="600">' + icon('play', 's') + ' Text vorlesen</button></div>' : '') +
+      '<p class="small muted tr-hint">' + icon('tr', 's') + ' Tippen Sie auf einen Satz oder markieren Sie Wörter – dann sehen Sie die Übersetzung.</p>' +
       '<div class="doc">' + r.paras.map(function (p, i) {
-        return '<div class="para" id="pa' + i + '"' + (p.audio ? ' data-play="' + p.audio + '" role="button" tabindex="0" aria-label="Absatz vorlesen"' : '') + '>' + md(p.t).replace(/\n/g, '<br>') + '</div>';
+        return '<div class="para" id="pa' + i + '">' + (p.audio ? '<button class="play sm para-play" data-play="' + p.audio + '" aria-label="Absatz vorlesen">' + icon('play') + '</button>' : '') +
+          '<div class="para-t">' + sentsHtml(p.s) + enPar(p.s.map(function (x) { return x[1]; }).join(' ')) + '</div></div>';
       }).join('') + '</div></section>' +
       (r.glossary.length ? '<section class="card" style="margin-top:14px"><h3 style="margin-top:0">Wörter zum Text</h3><div class="gloss">' + r.glossary.map(function (g) { return '<div><b>' + esc(g.de) + '</b> <span>– ' + esc(g.en) + '</span></div>'; }).join('') + '</div></section>' : '') +
       '<h2>Fragen zum Text</h2><section class="card" id="rq"></section>';
@@ -758,11 +938,13 @@
   /* ----- writing ----- */
   function secWriting(u, el) {
     var w = u.writing, txt = S.writing[u.id] || '';
-    el.innerHTML = '<section class="card"><h3 style="margin-top:0">' + icon('pen', 's') + ' Aufgabe</h3><p style="font-weight:600">' + esc(w.task) + '</p><ul class="points">' + w.points.map(function (p) { return '<li>' + esc(p) + '</li>'; }).join('') + '</ul></section>' +
-      '<section class="card" style="margin-top:14px"><h3 style="margin-top:0">Nützliche Redemittel</h3><div class="phr">' + w.phrases.map(function (p) { return '<div class="p"><div>' + esc(p.de) + '<div class="en-t">' + esc(p.en) + '</div></div></div>'; }).join('') + '</div></section>' +
+    el.innerHTML = '<section class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">' + icon('pen', 's') + ' Aufgabe</h3>' + enToggle() + '</div>' +
+      '<p style="font-weight:600">' + sentsHtml(w.taskS) + '</p>' + enPar(w.taskS.map(function (x) { return x[1]; }).join(' ')) +
+      '<ul class="points">' + w.points.map(function (p, i) { return '<li>' + sSpan(esc(p), w.pointsEn[i]) + enPar(w.pointsEn[i]) + '</li>'; }).join('') + '</ul></section>' +
+      '<section class="card" style="margin-top:14px"><h3 style="margin-top:0">Nützliche Redemittel</h3><div class="phr">' + w.phrases.map(function (p) { return '<div class="p"><div>' + sSpan(esc(p.de), p.en) + '<div class="en-t">' + esc(p.en) + '</div></div></div>'; }).join('') + '</div></section>' +
       '<h2>Ihr Text</h2><textarea class="write" id="wtext" placeholder="Schreiben Sie hier … (wird automatisch gespeichert)" spellcheck="false">' + esc(txt) + '</textarea>' +
       '<div class="row" style="justify-content:space-between;margin-top:8px"><span class="small muted" id="wcount"></span><button class="btn" id="showmodel">' + icon('eye', 's') + ' Musterlösung zeigen</button></div>' +
-      '<div id="model" hidden><h2>Musterlösung</h2><div class="row" style="margin-bottom:10px">' + playBtn(w.audio, 'Musterlösung anhören') + '<span class="small muted">Vergleichen Sie: Haben Sie alle Punkte? Stimmt die Wortstellung?</span></div><div class="model">' + esc(w.model) + '</div></div>';
+      '<div id="model" hidden><h2>Musterlösung</h2><div class="row" style="margin-bottom:10px">' + playBtn(w.audio, 'Musterlösung anhören') + '<span class="small muted">Vergleichen Sie: Haben Sie alle Punkte? Stimmt die Wortstellung?</span></div><div class="model">' + parasHtml(w.modelP) + '</div></div>';
     var ta = document.getElementById('wtext'), wc = document.getElementById('wcount');
     function count() { var n = ta.value.trim() ? ta.value.trim().split(/\s+/).length : 0; wc.textContent = n + ' Wörter'; }
     count();
@@ -781,20 +963,20 @@
   function secSpeaking(u, el) {
     var sp = u.speaking;
     var canRec = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
-    el.innerHTML = '<section class="card"><h3 style="margin-top:0">' + icon('mic', 's') + ' Aufgabe</h3><p style="font-weight:600;margin-bottom:0">' + esc(sp.task) + '</p></section>' +
-      '<section class="card" style="margin-top:14px"><h3 style="margin-top:0">Redemittel</h3><div class="phr">' + sp.phrases.map(function (p) { return '<div class="p">' + (p.audio ? playBtn(p.audio, 'Anhören', 'sm') : '<span style="width:32px;flex:none"></span>') + '<div>' + esc(p.de) + '<div class="en-t">' + esc(p.en) + '</div></div></div>'; }).join('') + '</div></section>' +
+    el.innerHTML = '<section class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">' + icon('mic', 's') + ' Aufgabe</h3>' + enToggle() + '</div><p style="font-weight:600;margin-bottom:0">' + sentsHtml(sp.taskS) + '</p>' + enPar(sp.taskS.map(function (x) { return x[1]; }).join(' ')) + '</section>' +
+      '<section class="card" style="margin-top:14px"><h3 style="margin-top:0">Redemittel</h3><div class="phr">' + sp.phrases.map(function (p) { return '<div class="p">' + (p.audio ? playBtn(p.audio, 'Anhören', 'sm') : '<span style="width:32px;flex:none"></span>') + '<div>' + sSpan(esc(p.de), p.en, p.audio) + '<div class="en-t">' + esc(p.en) + '</div></div></div>'; }).join('') + '</div></section>' +
       '<h2>Üben Sie laut</h2>' +
       sp.prompts.map(function (p, i) {
         return '<section class="card prompt-card" data-p="' + i + '"><div class="small muted">Frage ' + (i + 1) + ' von ' + sp.prompts.length + '</div>' +
-          '<div class="step qstep">' + playBtn(p.aq, 'Frage anhören') + '<span class="q-text">' + esc(p.q) + '</span></div>' +
+          '<div class="step qstep">' + playBtn(p.aq, 'Frage anhören') + '<span class="q-text">' + sentsHtml(p.qS) + enPar(p.qS.map(function (x) { return x[1]; }).join(' ')) + '</span></div>' +
           '<div class="step"><button class="btn sm" data-act="think" data-i="' + i + '">' + icon('timer', 's') + ' 45 Sekunden antworten</button><span class="timer" id="tm' + i + '"></span>' +
           (canRec ? '<button class="btn sm" data-act="rec" data-i="' + i + '">' + icon('mic', 's') + ' Aufnehmen</button>' : '') + '</div><div class="recbox" id="rb' + i + '"></div>' +
           '<button class="btn ghost sm" data-act="model" data-i="' + i + '">' + icon('eye', 's') + ' Beispielantwort</button>' +
-          '<div class="model-text" id="md' + i + '" hidden><div class="row" style="align-items:flex-start;flex-wrap:nowrap">' + playBtn(p.am, 'Beispielantwort anhören', 'sm') + '<div>' + esc(p.model) + '</div></div></div></section>';
+          '<div class="model-text" id="md' + i + '" hidden><div class="row" style="align-items:flex-start;flex-wrap:nowrap">' + playBtn(p.am, 'Beispielantwort anhören', 'sm') + '<div>' + sentsHtml(p.modelS) + enPar(p.modelS.map(function (x) { return x[1]; }).join(' ')) + '</div></div></div></section>';
       }).join('');
     el.onclick = function (e) {
       var b = e.target.closest('[data-act]');
-      if (!b) return;
+      if (!b || ['model', 'think', 'rec'].indexOf(b.dataset.act) < 0) return;
       var i = +b.dataset.i;
       if (b.dataset.act === 'model') { var m = document.getElementById('md' + i); m.hidden = !m.hidden; }
       if (b.dataset.act === 'think') {
@@ -963,13 +1145,14 @@
       '<div class="set-row"><div class="l"><b>Darstellung</b><span>Hell, dunkel oder wie das System</span></div>' + seg('theme', [['auto', 'Auto'], ['light', 'Hell'], ['dark', 'Dunkel']], s.theme) + '</div>' +
       '<div class="set-row"><div class="l"><b>Audio-Tempo</b><span>Langsamer hilft am Anfang</span></div>' + seg('rate', [[0.75, '0,75×'], [0.9, '0,9×'], [1, '1×']], s.rate) + '</div>' +
       '<div class="set-row"><div class="l"><b>Englische Übersetzungen</b><span>In den Wortlisten</span></div>' + seg('en', [[1, 'Zeigen'], [0, 'Verstecken']], s.en ? 1 : 0) + '</div>' +
+      '<div class="set-row"><div class="l"><b>Übersetzung unter Texten</b><span>Englisch unter Lesetexten, Grammatik, Aufgaben und Fragen. Einzelne Sätze: antippen oder markieren.</span></div>' + seg('paren2', [[1, 'Zeigen'], [0, 'Verstecken']], s.parEn ? 1 : 0) + '</div>' +
       '</section><h2>Offline</h2><section class="card"><div class="set-row"><div class="l" id="offl" style="flex:1">' + offlineHtml() + '</div>' +
       (OFF.supported ? '<button class="btn sm" data-act="precache">' + icon('download', 's') + ' Jetzt laden</button>' : '') + '</div></section>' +
       '<h2>Fortschritt</h2><section class="card">' +
       '<div class="set-row"><div class="l"><b>Sichern</b><span>Fortschritt als Datei speichern (z. B. um ihn auf ein anderes Gerät zu übertragen)</span></div><button class="btn sm" data-act="export">' + icon('download', 's') + ' Exportieren</button></div>' +
       '<div class="set-row"><div class="l"><b>Wiederherstellen</b><span>Eine gesicherte Datei laden</span></div><label class="btn sm">' + icon('upload', 's') + ' Importieren<input type="file" accept="application/json,.json" id="imp" hidden></label></div>' +
       '<div class="set-row"><div class="l"><b>Zurücksetzen</b><span>Löscht allen Fortschritt auf diesem Gerät</span></div><button class="btn sm again" data-act="reset">' + icon('trash', 's') + ' Zurücksetzen</button></div>' +
-      '</section><p class="small muted" style="margin-top:24px">Unterwegs · Version ' + esc(C.version) + ' · ' + C.units.length + ' Lektionen · ' + allVocab().length + ' Wörter.<br>Alle Inhalte sind Originalmaterial. Stimmen: Piper TTS (Thorsten, Kerstin, Ramona) – synthetisch erzeugt, daher nicht immer perfekt betont.</p>';
+      '</section><p class="small muted" style="margin-top:24px">Unterwegs · Version ' + esc(C.version) + ' · ' + C.units.length + ' Lektionen · ' + allVocab().length + ' Wörter.<br>Alle Inhalte sind Originalmaterial. Stimmen: Piper TTS (Thorsten, Kerstin) – synthetisch erzeugt, daher nicht immer perfekt betont.</p>';
     document.getElementById('imp').onchange = function (e) {
       var f = e.target.files[0]; if (!f) return;
       var r = new FileReader();
@@ -1011,6 +1194,16 @@
       });
       return;
     }
+    var sEl = e.target.closest('.s');
+    if (sEl && main.contains(sEl) && !e.target.closest('button, a, input, textarea, .opt, .tile, .mitem')) {
+      var sel = window.getSelection && window.getSelection();
+      if (!sel || sel.isCollapsed) {
+        $$('.s.tapped').forEach(function (x) { x.classList.remove('tapped'); });
+        sEl.classList.add('tapped');
+        openSheet([itemFromEl(sEl)], [], {});
+        return;
+      }
+    }
     var n = e.target.closest('[data-next]');
     if (n) { var parts = n.dataset.next.split(':'); if (COUNTED.indexOf(parts[1]) >= 0) setDone(+parts[0], parts[1]); }
     var a = e.target.closest('[data-act]');
@@ -1027,6 +1220,10 @@
       S.settings.en = v === '1'; save();
       var vl = document.getElementById('vlist'); if (vl) vl.classList.toggle('hide-en', !S.settings.en);
       $$('[data-act="en"]').forEach(function (b) { b.classList.toggle('on', b === a); });
+    } else if (act === 'paren' || act === 'paren2') {
+      S.settings.parEn = act === 'paren' ? !S.settings.parEn : v === '1'; save();
+      applyParEn();
+      if (act === 'paren2') $$('[data-act="paren2"]').forEach(function (b) { b.classList.toggle('on', b === a); });
     } else if (act === 'dmode') {
       S.settings.dmode = v; save();
       var dl = document.getElementById('dlg'); if (dl) dl.className = 'dlg mode-' + v;
@@ -1065,7 +1262,7 @@
 
   /* ---------------- router ---------------- */
   function route() {
-    Player.stop(); stopRecording();
+    Player.stop(); stopRecording(); closeSheet(true); hidePill();
     var h = location.hash.replace(/^#\/?/, '');
     var p = h.split('/').filter(Boolean);
     if (p[0] === 'u') renderUnit(+p[1], p[2] || 'ueberblick');
