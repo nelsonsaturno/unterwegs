@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Unterwegs – Deutsch A2·B1</title>
+<meta name="description" content="Offline-Deutschkurs A2 bis B1 mit Audio – Schweizer Alltag und fide.">
+<meta name="theme-color" content="#0E6E66" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111417" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Unterwegs">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="app.css">
+<script>
+  try {
+    var t = JSON.parse(localStorage.getItem('uw-progress-v1') || '{}');
+    if (t.settings && t.settings.theme && t.settings.theme !== 'auto') document.documentElement.setAttribute('data-theme', t.settings.theme);
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Zum Inhalt</a>
+<header class="topbar" id="topbar"></header>
+<div id="banner"></div>
+<main id="main" tabindex="-1"></main>
+<div id="toast" role="status" aria-live="polite"></div>
+<noscript><p style="padding:24px">Bitte JavaScript aktivieren.</p></noscript>
+<script src="data/course.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

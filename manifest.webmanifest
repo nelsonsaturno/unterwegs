@@ -1,0 +1,16 @@
+{
+  "name": "Unterwegs – Deutsch A2·B1",
+  "short_name": "Unterwegs",
+  "description": "Offline-Deutschkurs A2 bis B1 mit Audio – Schweizer Alltag und fide.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F7F5F0",
+  "theme_color": "#0E6E66",
+  "lang": "de-CH",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
